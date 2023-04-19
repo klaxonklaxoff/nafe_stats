@@ -1,0 +1,309 @@
+---
+title: "Quick NAFE Stats"
+author: "Brittny Vongdara"
+date: 2023-04-19
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, fig.width = 10)
+
+# Read in libraries ----
+library(rvest)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(scales)
+library(MetBrewer)
+
+# Functions ----
+remove_spaces <- function(spacey_cols) {
+  gsub(pattern = "\\s+",
+       replacement = " ",
+       x = spacey_cols)
+}
+
+remove_commas <- function(decomma_cols) {
+  as.numeric(gsub(
+    pattern = ",",
+    replacement = "",
+    x = decomma_cols
+  ))
+}
+
+# Gather and clean data ----
+# Define root directory for TBS website with salary data
+url <-
+  "https://www.canada.ca/en/treasury-board-secretariat/services/innovation/human-resources-statistics/diversity-inclusion-statistics/"
+
+temp_df <- 
+  html_nodes(read_html(paste0(
+    url,
+    "distribution-public-service-canada-employees-designated-sub-group-department-members-visible-minorities"
+  )), "table") %>%
+  html_table(fill = TRUE)
+
+row_no <- -c(1, 70:71) # there are 69 departments from 2021-2019 and 68 departments prior to 2019
+col_no <- c(1, 2, 9, 11, 13, 15, 17, 21, 25)
+
+df <-
+  bind_rows({
+    temp_df[[1]][row_no, col_no] %>%
+      mutate(year = 2021)
+  }, {
+    temp_df[[2]][row_no, col_no] %>%
+      mutate(year = 2020)
+  },
+  {
+    temp_df[[3]][row_no, col_no] %>%
+      mutate(year =  2019)
+  },
+  {
+    temp_df[[4]][row_no, col_no] %>%
+      mutate(year = 2018)
+  },
+  {
+    temp_df[[5]][row_no, col_no] %>%
+      mutate(year = 2017)
+  }) %>% 
+  filter(!`Department / Agency` %in% c("Total", ""),
+         !str_detect(`Department / Agency`, "Table 4")) %>% 
+  mutate(
+    across(!`Department / Agency`,
+           ~ replace(., . ==  "Table 1 Footnote *" ,
+                     NA)), # replace footnote with NA
+    across(!`Department / Agency`, remove_commas),
+    `Department / Agency` = gsub(
+      pattern = "\\s+",
+      replacement = " ",
+      x = `Department / Agency`
+    ),
+    `Department / Agency` = gsub(
+      pattern = "Table [0-9] Footnote [0-9]",
+      replacement = "",
+      x = `Department / Agency`
+    ),
+    `Department / Agency` = trimws(`Department / Agency`),
+    asian_pop = rowSums(across(
+      c(
+        Chinese,
+        Japanese,
+        Korean,
+        Filipino,
+        `South Asian/ East Indian`,
+        `Southeast Asian`
+      )
+    ), na.rm = TRUE),
+    sub_asian_all = `All employees` - asian_pop,
+    pct_vm = round(asian_pop/`Members of visible minorities` * 100, 2),
+    pct_all = round(asian_pop/`All employees` * 100, 2),
+    pct_non_asian = round(sub_asian_all/`All employees` * 100, 2),
+  ) %>%
+  pivot_longer(cols = c(
+    `All employees`,
+    `Members of visible minorities`,
+    asian_pop,
+    sub_asian_all,
+    Chinese,
+    Japanese,
+    Korean,
+    Filipino,
+    `South Asian/ East Indian`,
+    `Southeast Asian`
+    # pct_all,
+    # pct_non_asian
+    # pct_vm
+  ),
+  names_to = "group",
+  values_to = "population")
+
+## Asian population ----
+asian_pop <- 
+  df %>% 
+  filter(group %in% c("sub_asian_all", "asian_pop")) %>% 
+  group_by(year, group) %>% 
+  summarise(total = sum(population)) %>% 
+  ungroup() %>% 
+  mutate(group = ifelse(group == "asian_pop", "Asian population", "Non-Asian population"))
+
+yoy <- 
+  asian_pop %>% 
+  group_by(group) %>% 
+  mutate(yoy = round((total - lag(total)) / lag(total) * 100, 2)) %>% 
+  ungroup()
+
+## Breakdown by departments ----
+df_asian_pop <- 
+  df %>% 
+  select(-pct_vm) %>% 
+  filter(group %in% c("sub_asian_all", "asian_pop")) %>% 
+  mutate(group = ifelse(group == "sub_asian_all", "Non-Asian population", "Asian population")) %>% 
+  pivot_longer(cols = starts_with("pct_"), names_to = "percent", values_to = "value") %>% 
+  mutate(Percent = ifelse(percent == "pct_all", "Asian", "Non-Asian")) %>% 
+  filter((group == "Asian population" & Percent == "Asian") |
+           (group == "Non-Asian population" & Percent == "Non-Asian"))
+
+top_10 <- 
+  df_asian_pop %>% 
+  filter(year == 2021, group == "Asian population") %>% 
+  arrange(desc(population)) %>% 
+  head(10)
+
+plot_top_10 <- 
+  df_asian_pop %>% 
+  filter(`Department / Agency` %in% top_10$`Department / Agency`)
+
+# Functions ----
+plot_department <- function(x){
+  ggplotly({
+    ggplot(x,
+           aes(
+             x = reorder(`Department / Agency`, population),
+             y = population,
+             fill = group,
+             colour = group,
+             text = paste0(
+               "Year: ", year,
+               "\nGroup: ", group,
+               "\nCount: ", format(population, big.mark = ","),
+               "\nPercent: ", value, "%"
+             )
+           )) +
+      geom_bar(stat = "identity",
+               position = "stack") +
+      theme_minimal() +
+      scale_y_continuous(labels = comma) +
+      scale_colour_manual(values = c(met.brewer("Hiroshige")[1],
+                                     met.brewer("Hiroshige", direction = -1)[1])) +
+      scale_fill_manual(values = c(met.brewer("Hiroshige")[1],
+                                   met.brewer("Hiroshige", direction = -1)[1])) +
+      labs(
+        x = "Department/Agency",
+        y = "Population",
+        fill = "Group",
+        colour = "Group"
+      ) +
+      facet_wrap(~ year, ncol = 1) +
+      coord_flip()
+  }, tooltip = "text")
+}
+```
+## About
+
+This repository contains code to visualize employee salary data from the Government of Canada's Treasury Board, publicly available [here](https://www.canada.ca/en/treasury-board-secretariat/services/innovation/human-resources-statistics/diversity-inclusion-statistics/distribution-public-service-canada-employees-designated-sub-group-department-members-visible-minorities.html).
+
+## The Data
+
+This data is based on self-identification of equity-deserving group and is only available for the core federal public service. In order to obtain the data, the webpage was scraped with the R package `rvest`. Then, `dplyr` and `tidyr` were used to clean it up and plotting was done with: `ggplot2`, `plotly` `scales`, and `MetBrewer`.
+
+We are including the following groups in `Total Asian Population`:
+
+- Chinese
+- Japanese
+- Korean
+- Filipino
+- South Asian/ East Indian
+- Southeast Asian
+
+Non-White West Asian was not included because it was grouped along with North African and Arab. If needed, this group can be added into the data.
+
+## The Plots
+
+### Total Asian Population
+
+This plot looks at the total count of self-identifying Asian employees.
+
+```{r plot_total}
+ggplotly({
+  ggplot(asian_pop,
+         aes(
+           x = year,
+           y = total,
+           fill = group,
+           colour = group,
+           text = paste0(
+             "Year: ", year,
+             "\nGroup: ", group,
+             "\nCount: ", format(total, big.mark = ",")
+           )
+         )) +
+    geom_line(group = 1) +
+    theme_minimal() +
+    scale_y_continuous(labels = comma) +
+    scale_colour_manual(values = c(met.brewer("Hiroshige")[1],
+                                   met.brewer("Hiroshige", direction = -1)[1])) +
+    labs(
+      x = "Year",
+      y = "Population",
+      fill = "Group",
+      colour = "Group"
+    )
+}, tooltip = "text") %>% 
+  layout(hovermode = "x unified")
+```
+
+### Year-Over-Year Growth
+
+This plot looks at the year-over-year (YOY) growth of self-identifying Asian employees.
+
+```{r plot_yoy}
+## Year-over-year growth ----
+ggplotly({
+  ggplot(yoy,
+         aes(
+           x = year,
+           y = yoy,
+           text = paste0(
+             "Year: ", year,
+             "\nYear-Over-Year Growth: ", yoy, "%",
+             "\nCount: ", format(total, big.mark = ",")
+           )
+         )) +
+    geom_line(group = 1,
+              aes(colour = group)) +
+    theme_minimal() +
+    scale_colour_manual(values = c(met.brewer("Hiroshige")[1],
+                                   met.brewer("Hiroshige", direction = -1)[1])) +
+    labs(x = "Year",
+         y = "Year-Over-Year Growth (%)",
+         colour = "Group"
+    )
+}, tooltip = "text") %>% # plotly wrapper
+  layout(hovermode = "x unified")
+```
+
+Considering these two plots, we can see that though the YOY is comparable between Asian and non-Asian employees, the pre-existing disproportionality between the groups continue to persist.
+
+## Breakdown by departments
+
+To give context, in the 2016 Census 6,095,235 people in Canada reported having Asian origins, representing 17.7% of Canada's population.[^1] At most, ESDC in 2021 had 12.16% of their employees self-identifying as Asian.
+
+[^1]: Source: Statistics Canada. 2017. Canada [Country] and Canada [Country] (table). Census Profile, 2016 Census.
+
+### Top 10 departments
+
+This is a more focused plot which looks at the top 10 departments with the highest Asian population.
+
+```{r breakdown_top, fig.height = 20}
+plot_department(x = plot_top_10)
+```
+
+### All departments
+
+This is a really busy plot but it shows the breakdown of Asian and non-Asian employees by count.
+
+```{r breakdown_all, fig.height = 50}
+plot_department(x = df_asian_pop)
+```
+
+## Future endeavours
+
+Moving forward, these data can be further broken down looking more into the departments/agencies, looking at the classification, salary wages, etc. We can also compare the data to the Workforce Availability for a more accurate comparison.
+
