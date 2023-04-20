@@ -198,7 +198,7 @@ plot_department <- function(x){
 ```
 ## About
 
-This repository contains code to visualize employee salary data from the Government of Canada's Treasury Board, publicly available [here](https://www.canada.ca/en/treasury-board-secretariat/services/innovation/human-resources-statistics/diversity-inclusion-statistics/distribution-public-service-canada-employees-designated-sub-group-department-members-visible-minorities.html).
+This repository contains code to visualize employee salary data from the Government of Canada's Treasury Board, publicly available [here](https://www.canada.ca/en/treasury-board-secretariat/services/innovation/human-resources-statistics/diversity-inclusion-statistics/distribution-public-service-canada-employees-designated-sub-group-department-members-visible-minorities.html). You can access the GitHub repo [here](https://github.com/klaxonklaxoff/nafe_stats).
 
 ## The Data
 
